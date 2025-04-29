@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stickman Grapple Game</title>
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.7.0/lib/p5.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #333;
+            font-family: 'Press Start 2P', cursive;
+            overflow: hidden; /* Prevent scrollbars */
+        }
+        #gameCanvas {
+            border: 2px solid #ddd;
+            background-color: #222;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #instructions {
+            color: #eee;
+            font-size: 0.8em;
+            margin-top: 10px;
+            text-align: center;
+            max-width: 80%;
+        }
+        .health-bar {
+            width: 100px;
+            height: 8px;
+            border: 2px solid #ddd;
+            margin: 5px;
+            position: absolute; /* Position absolutely */
+        }
+        #health-bar-red {
+            top: 10px;          /* Position at the top */
+            left: 200px;
+        }
+        #health-bar-blue {
+            top: 10px;
+            left: 500px;
+        }
+        #restartButton {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 1em;
+            cursor: pointer;
+            background: #4CAF50;
+            color: #FFFFFF;
+            border: none;
+            border-radius: 5px;
+            font-family: 'Press Start 2P', cursive;
+            transition: background 0.3s ease;
+        }
+        #restartButton:hover {
+            background: #45a049;
+        }
+        #restartButton.hidden {
+            display: none;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="instructions">
+            <p>Use LEFT/RIGHT/UP/DOWN arrow keys to move your stickman (Red).</p>
+            <p>Use A/D/W/S keys to move the other stickman (Blue).</p>
+            <p>Press SPACEBAR to make Red Stickman punch.</p>
+            <p>Press R to restart.</p>
+            <p>Press Y for Red Stickman Mega Punch (Once per 10 punches).</p>
+            <p>Press L to make Blue Stickman shoot magic shots.</p>
+        </div>
+        <div id="health-bar-red" class="health-bar">
+            <div id="health-red-fill" style="background-color: red; height: 100%;"></div>
+        </div>
+        <div id="health-bar-blue" class="health-bar">
+            <div id="health-blue-fill" style="background-color: blue; height: 100%;"></div>
+        </div>
+        <button id="restartButton" class="hidden">Restart</button>
+    </div>
+
+    <script>
+        let canvas = document.getElementById('gameCanvas');
+        let ctx = canvas.getContext('2d');
+        let restartButton = document.getElementById('restartButton');
+
+        let stickman1 = {
+            x: 200,
+            y: canvas.height - 150,
+            width: 30,
+            height: 100,
+            color: 'red',
+            speed: 5,
+            isGrappling: false,
+            grappleTarget: null,
+            health: 100,
+            name: "Red Stick",
+            grappleXOffset: 0,
+            grappleYOffset: 0,
+            grappleStage: 0, // 0: not grappling, 1: initial grapple, 2: reaching, 3: lifting, 4: suplexing, 5: thrown, 6: impact
+            direction: 1, // 1 for right, -1 for left
+            neckX: 0,
+            neckY: 0,
+            isAirborne: false,
+            throwTimer: 0,
+            rotationAngle: 0,
+            hasCollided: false, // Added for collision detection
+            isPunching: false,  // Add this property to track punching state
+            punchFrame: 0,     // Add this property to track the punch animation frame
+            punchCount: 0,
+            canMegaPunch: true,
+            isMegaPunching: false,
+            hasBeard: true,
+            hasHat: true
+        };
+
+        let stickman2 = {
+            x: canvas.width - 200,
+            y: canvas.height - 150,
+            width: 30,
+            height: 100,
+            color: 'blue',
+            speed: 5,
+            isGrappling: false,
+            grappleTarget: null,
+            health: 100,
+            name: "Blue Stick",
+            grappleXOffset: 0,
+            grappleYOffset: 0,
+            grappleStage: 0,
+            direction: -1,
+            isAirborne: false,
+            throwTimer: 0,
+            rotationAngle: 0,
+            hasCollided: false, // Added for collision detection
+            isShooting: false,
+            magicShots: [],
+            hasBeard: false,
+            hasHat: true
+        };
+
+        let gravity = 0.5;
+        let friction = 0.9;
+        let gameRunning = true;
+        let animationFrameId; // To store the animation frame ID
+        let grapplingTimer = 0; // Timer to control suplex stages
+        const REACHING_DURATION = 20;
+        const LIFTING_DURATION = 30;
+        const SUPLEX_DURATION = 60;
+        const THROW_DURATION = 50;
+        const IMPACT_DURATION = 20;
+        const MAX_GRAPPLE_HEIGHT = canvas.height / 2; // Maximum height for grappling
+        const PUNCH_DURATION = 5; // Number of frames for the punch animation
+        const PUNCH_DAMAGE = 3; // Reduced punch damage again
+        const MEGA_PUNCH_DAMAGE = 30;
+        const MEGA_PUNCH_DURATION = 10;
+        const MAGIC_SHOT_SPEED = 7;
+        const MAGIC_SHOT_SIZE = 10;
+        const MAGIC_SHOT_COLOR = 'rgba(0, 150, 255, 0.8)'; // Semi-transparent blue
+
+        function drawStickman(stickman) {
+            ctx.save(); // Save the current context state
+            ctx.fillStyle = stickman.color;
+
+            // Head
+            ctx.beginPath();
+            ctx.arc(stickman.x + stickman.width / 2, stickman.y, 15, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Eyes
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            const eyeXOffset = stickman.direction * 5;  // Adjust eye position based on direction
+            ctx.arc(stickman.x + stickman.width / 2 - 5 + eyeXOffset, stickman.y - 2, 3, 0, Math.PI * 2); // Left eye
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(stickman.x + stickman.width / 2 + 5 + eyeXOffset, stickman.y - 2, 3, 0, Math.PI * 2); // Right eye
+            ctx.fill();
+
+            // Beard
+            if (stickman.hasBeard) {
+                ctx.fillStyle = '#775431'; // Brown beard color
+                ctx.beginPath();
+                ctx.moveTo(stickman.x, stickman.y + stickman.height / 2);
+                ctx.lineTo(stickman.x + stickman.width, stickman.y + stickman.height / 2);
+                ctx.lineTo(stickman.x + stickman.width, stickman.y + stickman.height * 0.7);
+                ctx.lineTo(stickman.x + stickman.width/2, stickman.y + stickman.height);
+                ctx.lineTo(stickman.x, stickman.y + stickman.height * 0.7);
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            // Hat
+            if (stickman.hasHat) {
+                ctx.fillStyle = '#00008B';  // Dark Blue
+                ctx.beginPath();
+                ctx.fillRect(stickman.x, stickman.y - 20, stickman.width, 10);
+                ctx.fillStyle = '#B8860B';  // Dark Goldenrod
+                ctx.beginPath();
+                ctx.fillRect(stickman.x - 5, stickman.y - 25, stickman.width + 10, 5);
+            }
+
+            // Body
+            ctx.beginPath();
+            ctx.moveTo(stickman.x + stickman.width / 2, stickman.y + 15);
+            if (stickman.grappleStage > 2) {
+                //save
+                ctx.save();
+                //translate and rotate
+                ctx.translate(stickman.x + stickman.width / 2, stickman.y + 15);
+                ctx.rotate(stickman.rotationAngle);
+                ctx.lineTo(0, stickman.height * 0.8);
+                ctx.restore();
+            } else {
+                ctx.lineTo(stickman.x + stickman.width / 2, stickman.y + stickman.height);
+            }
+            ctx.stroke();
+
+            // Arms
+            ctx.beginPath();
+            ctx.moveTo(stickman.x + stickman.width / 2, stickman.y + 30);
+            if (stickman.isPunching || stickman.isMegaPunching) {
+                // Draw the punch
+                const punchLength = stickman.isMegaPunching ? 40 : 20;
+                const punchDuration = stickman.isMegaPunching ? MEGA_PUNCH_DURATION : PUNCH_DURATION;
+                if (stickman.punchFrame < punchDuration) {
+                    ctx.lineTo(stickman.x + stickman.width + (stickman.direction * punchLength), stickman.y + 20); // Extend arm
+                } else {
+                    ctx.lineTo(stickman.x, stickman.y + 50);
+                }
+            }
+            else if (stickman.grappleStage === 2) {
+                //reaching
+                ctx.lineTo(stickman.x + stickman.width / 2 + (stickman.direction * 30), stickman.y + 10);
+            }
+            else if (stickman.grappleStage > 2) {
+                ctx.lineTo(stickman.x + stickman.width / 2 + (stickman.direction * 20), stickman.y + 20);
+            }
+            else{
+                ctx.lineTo(stickman.x, stickman.y + 50);
+            }
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(stickman.x + stickman.width / 2, stickman.y + 30);
+             if (stickman.isPunching || stickman.isMegaPunching) {
+                // Draw the punch
+                const punchLength = stickman.isMegaPunching ? 40 : 20;
+                 const punchDuration = stickman.isMegaPunching ? MEGA_PUNCH_DURATION : PUNCH_DURATION;
+                if (stickman.punchFrame < punchDuration) {
+                   ctx.lineTo(stickman.x - (stickman.direction * punchLength), stickman.y + 20); // Extend arm
+                }
+                else {
+                     ctx.lineTo(stickman.x + stickman.width, stickman.y + 50);
+                }
+            }
+            else if  (stickman.grappleStage === 2){
+                ctx.lineTo(stickman.x + stickman.width / 2 + (stickman.direction * -30), stickman.y + 10);
+            }
+            else if (stickman.grappleStage > 2) {
+                ctx.lineTo(stickman.x + stickman.width / 2 + (stickman.direction * -20), stickman.y + 20);
+            }
+            else{
+                ctx.lineTo(stickman.x + stickman.width, stickman.y + 50);
+            }
+            ctx.stroke();
+
+            // Legs
+            ctx.beginPath();
+            ctx.moveTo(stickman.x + stickman.width / 2, stickman.y + stickman.height);
+            ctx.lineTo(stickman.x, stickman.y + stickman.height + 30);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(stickman.x + stickman.width / 2, stickman.y + stickman.height);
+            ctx.lineTo(stickman.x + stickman.width, stickman.y + stickman.height + 30);
+            ctx.stroke();
+
+            ctx.restore(); // Restore the context state
+        }
+
+        function drawMagicShot(shot) {
+            ctx.fillStyle = shot.color;
+            ctx.beginPath();
+            ctx.arc(shot.x, shot.y, shot.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+
+        let keys = {};
+
+        document.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            if (e.key === 'r' || e.key === 'R') {
+                resetGame();
+            }
+            if (e.key === 'l' || e.key === 'L') {
+                stickman2.isShooting = true;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+            if (e.key === 'l' || e.key === 'L') {
+                stickman2.isShooting = false;
+            }
+        });
+
+        function updateStickman1(stickman) {
+            // Horizontal and vertical movement for stickman1
+            if (keys['ArrowLeft'] && !keys['ArrowRight']) {
+                stickman.x -= stickman.speed;
+                stickman.direction = -1; // Set direction to left
+            }
+            if (keys['ArrowRight'] && !keys['ArrowLeft']) {
+                stickman.x += stickman.speed;
+                stickman.direction = 1; // Set direction to right
+            }
+            if (keys['ArrowUp'] && !keys['ArrowDown']) {
+                stickman.y -= stickman.speed;
+            }
+            if (keys['ArrowDown'] && !keys['ArrowUp']) {
+                stickman.y += stickman.speed;
+            }
+
+            // Stay within bounds
+            stickman.x = Math.max(0, Math.min(stickman.x, canvas.width - stickman.width));
+            stickman.y = Math.max(0, Math.min(stickman.y, canvas.height - stickman.height));
+        }
+
+        function updateStickman2(stickman) {
+            // Horizontal and vertical movement for stickman2
+            if (keys['a'] && !keys['d']) {
+                stickman.x -= stickman.speed;
+                stickman.direction = -1;
+            }
+            if (keys['d'] && !keys['a']) {
+                stickman.x += stickman.speed;
+                stickman.direction = 1;
+            }
+            if (keys['w'] && !keys['s']) {
+                stickman.y -= stickman.speed;
+            }
+            if (keys['s'] && !keys['w']) {
+                stickman.y += stickman.speed;
+            }
+
+            // Stay within bounds
+            stickman.x = Math.max(0, Math.min(stickman.x, canvas.width - stickman.width));
+            stickman.y = Math.max(0, Math.min(stickman.y, canvas.height - stickman.height));
+
+            if (stickman.isShooting) {
+                let shotX = stickman.x + (stickman.direction > 0 ? stickman.width : 0);
+                let shotY = stickman.y + stickman.height / 3;
+                stickman.magicShots.push({
+                    x: shotX,
+                    y: shotY,
+                    size: MAGIC_SHOT_SIZE,
+                    speed: MAGIC_SHOT_SPEED * stickman.direction,
+                    color: MAGIC_SHOT_COLOR
+                });
+                stickman.isShooting = false; // Fire only one shot per key press
+            }
+        }
+
+        function updateMagicShots(stickman1, stickman2) {
+            for (let i = stickman2.magicShots.length - 1; i >= 0; i--) {
+                let shot = stickman2.magicShots[i];
+                shot.x += shot.speed / 2;
+
+                // Check collision with stickman1
+                if (
+                    shot.x + shot.size > stickman1.x &&
+                    shot.x - shot.size < stickman1.x + stickman1.width &&
+                    shot.y + shot.size > stickman1.y &&
+                    shot.y - shot.size < stickman1.y + stickman1.height
+                ) {
+                    stickman1.health -= 10; // Adjust damage as needed
+                    if (stickman1.health < 0) {
+                        stickman1.health = 0;
+                    }
+                    stickman2.magicShots.splice(i, 1); // Remove the shot
+                }
+                // Remove shots that go off-screen
+                else if (shot.x > canvas.width || shot.x < 0) {
+                    stickman2.magicShots.splice(i, 1);
+                }
+            }
+        }
+
+        function drawHealthBar(stickman) {
+            ctx.fillStyle = '#333';
+            ctx.fillRect(stickman.x - stickman.width, stickman.y - 20, stickman.width * 3, 8);
+            ctx.fillStyle = stickman.color;
+            ctx.fillRect(stickman.x - stickman.width, stickman.y - 20, (stickman.health / 100) * (stickman.width * 3), 8);
+            ctx.fillStyle = '#eee';
+            ctx.font = '12px "Press Start 2P"';
+            ctx.fillText(stickman.name, stickman.x - stickman.width, stickman.y - 30);
+        }
+
+        function checkCollision(stickman1, stickman2) {
+            return !(
+                stickman1.x + stickman1.width < stickman2.x ||
+                stickman1.x > stickman2.x + stickman2.width ||
+                stickman1.y + stickman1.height < stickman2.y ||
+                stickman1.y > stickman2.y + stickman2.height
+            );
+        }
+
+        function updateGame() {
+            if (!gameRunning) return;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            updateStickman1(stickman1);
+            updateStickman2(stickman2);
+            updateMagicShots(stickman1, stickman2); // Update magic shots
+
+             if (keys[' '] && !stickman1.isPunching && !stickman1.isMegaPunching) {
+                stickman1.isPunching = true;
+                stickman1.punchFrame = 0;
+                stickman1.punchCount++;
+                // Check for punch hit
+                if (checkCollision(stickman1, stickman2)) {
+                    stickman2.health -= PUNCH_DAMAGE;
+                    if (stickman2.health < 0) {
+                        stickman2.health = 0;
+                    }
+                    console.log("Punch Hit!");
+                }
+            }
+
+            if (keys['y'] && stickman1.canMegaPunch && !stickman1.isPunching && !stickman1.isMegaPunching) {
+                stickman1.isMegaPunching = true;
+                stickman1.punchFrame = 0;
+                stickman1.canMegaPunch = false;
+                stickman1.punchCount = 0;
+                 if (checkCollision(stickman1, stickman2)) {
+                    stickman2.health -= MEGA_PUNCH_DAMAGE;
+                    if (stickman2.health < 0) {
+                        stickman2.health = 0;
+                    }
+                    console.log("Mega Punch Hit!");
+                }
+            }
+
+
+            // Handle punch animation for stickman1
+            if (stickman1.isPunching) {
+                stickman1.punchFrame++;
+                if (stickman1.punchFrame >= PUNCH_DURATION) {
+                    stickman1.isPunching = false;
+                    stickman1.punchFrame = 0;
+                }
+            }
+
+            if (stickman1.isMegaPunching) {
+                stickman1.punchFrame++;
+                if (stickman1.punchFrame >= MEGA_PUNCH_DURATION) {
+                    stickman1.isMegaPunching = false;
+                    stickman1.punchFrame = 0;
+                }
+            }
+
+            if (stickman1.punchCount >= 10) {
+                stickman1.canMegaPunch = true;
+            }
+
+
+            // Update stickman positions and health bars
+            drawStickman(stickman1);
+            drawStickman(stickman2);
+            for (let shot of stickman2.magicShots) {
+                drawMagicShot(shot);
+            }
+            drawHealthBar(stickman1);
+            drawHealthBar(stickman2);
+            updateHealthBarDisplay(stickman1, "health-red-fill");
+            updateHealthBarDisplay(stickman2, "health-blue-fill");
+
+            if (stickman1.health <= 0 || stickman2.health <= 0) {
+                gameRunning = false;
+                let winner = stickman1.health <= 0 ? stickman2 : stickman1;
+                ctx.fillStyle = '#eee';
+                ctx.font = '24px "Press Start 2P"';
+                ctx.textAlign = 'center';
+                ctx.fillText(winner.name + " WINS!", canvas.width / 2, canvas.height / 2);
+                restartButton.classList.remove('hidden'); // Show the restart button
+            } else {
+                animationFrameId = requestAnimationFrame(updateGame); // Store the ID
+            }
+        }
+
+        function updateHealthBarDisplay(stickman, elementId) {
+            const healthFill = document.getElementById(elementId);
+            healthFill.style.width = `${stickman.health}%`;
+        }
+
+        function resetGame() {
+            stickman1.x = 200;
+            stickman1.y = canvas.height - 150;
+            stickman1.health = 100;
+            stickman1.isPunching = false;
+            stickman1.punchFrame = 0;
+            stickman1.punchCount = 0;
+            stickman1.canMegaPunch = true;
+            stickman1.isMegaPunching = false;
+            stickman2.x = canvas.width - 200;
+            stickman2.y = canvas.height - 150;
+            stickman2.health = 100;
+            stickman2.isPunching = false;
+            stickman2.punchFrame = 0;
+            stickman2.isShooting = false;
+            stickman2.magicShots = [];
+            gameRunning = true;
+            restartButton.classList.add('hidden'); // Hide the restart button
+            updateGame();
+        }
+
+        restartButton.addEventListener('click', resetGame);
+
+
+        updateGame(); // Start the game loop.
+
+        // Add this to stop animation when game is over.  Call this function, for example, when one stickman's health is zero.
+        function stopGameLoop() {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+            gameRunning = false; // Also set gameRunning to false if needed
+        }
+    </script>
+</body>
+</html>
